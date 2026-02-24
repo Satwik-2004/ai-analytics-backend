@@ -1,0 +1,16 @@
+# API Framework & Validation
+fastapi==0.110.0
+uvicorn==0.29.0
+pydantic==2.6.4
+
+# Database & SQL Parsing
+SQLAlchemy==2.0.29       # For secure database connection pooling
+pymysql==1.1.0           # MySQL driver
+sqlglot==23.2.0          # AST Parser: This is our critical shield for validating SQL!
+
+# Environment & AI
+python-dotenv==1.0.1
+openai==1.14.2           # Standard SDK for hitting your chosen LLM (OpenAI/Gemini/etc.)
+
+# Testing
+pytest==8.1.1
