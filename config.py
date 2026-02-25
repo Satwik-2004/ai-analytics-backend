@@ -24,6 +24,21 @@ class Settings:
     MAX_ROWS_LIMIT = int(os.getenv("MAX_ROWS_LIMIT", 500))
     QUERY_TIMEOUT_SECONDS = int(os.getenv("QUERY_TIMEOUT_SECONDS", 15))
     MAX_CLARIFICATION_TURNS = int(os.getenv("MAX_CLARIFICATION_TURNS", 1))
-    ALLOWED_TABLE = os.getenv("ALLOWED_TABLE", "corporate_tickets")
+    
+    # V2 Security Whitelist (Replaces ALLOWED_TABLE)
+    ALLOWED_TABLES = [
+        "corporate_tickets",
+        "corporate_ticket_finance_status",
+        "corporate_ticket_general_service_report",
+        "corporate_ticket_quotation",
+        "corporate_ticket_quotation_history",
+        "corporate_ticket_quotation_items",
+        "corporate_ticket_status_history",
+        "corporate_tickets_finance",
+        "corporate_tickets_old",
+        "corporate_tickets_payment_details",
+        "corporate_tickets_status",
+        "corporate_tickets_uploader"
+    ]
 
 settings = Settings()
