@@ -1,7 +1,7 @@
 import sqlglot
 from sqlglot import exp
 from config import settings
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 
 def validate_and_format_sql(sql_query: str) -> Dict[str, Any]:
     """
@@ -13,7 +13,7 @@ def validate_and_format_sql(sql_query: str) -> Dict[str, Any]:
         # 1. Parse the SQL specifically for MySQL dialect
         parsed = sqlglot.parse_one(sql_query, read="mysql")
         
-    except Exception as e: # <--- CRITICAL FIX: Now catches ALL parsing and tokenizing errors cleanly
+    except Exception as e:
         return {
             "is_valid": False,
             "error": f"The generated SQL is malformed or incomplete: {str(e)}",
@@ -37,8 +37,17 @@ def validate_and_format_sql(sql_query: str) -> Dict[str, Any]:
             "safe_sql": None
         }
 
-    # 4. Restrict Table Access
-    # Find every table referenced in the query and ensure it is the ALLOWED_TABLE
+    # 3.5 NEW: Block Dangerous MySQL Functions (Denial of Service protection)
+    dangerous_functions = ["sleep", "benchmark"]
+    for func in parsed.find_all(exp.Func):
+        if func.name.lower() in dangerous_functions:
+            return {
+                "is_valid": False,
+                "error": f"Security Violation: The function '{func.name.upper()}' is forbidden.",
+                "safe_sql": None
+            }
+
+    # 4. Restrict Table Access (V2: Multi-Table Support)
     tables = list(parsed.find_all(exp.Table))
     if not tables:
         return {
@@ -47,36 +56,31 @@ def validate_and_format_sql(sql_query: str) -> Dict[str, Any]:
             "safe_sql": None
         }
         
+    allowed_lower = [t.lower() for t in settings.ALLOWED_TABLES]
+    
     for table in tables:
-        if table.name.lower() != settings.ALLOWED_TABLE.lower():
+        if table.name.lower() not in allowed_lower:
             return {
                 "is_valid": False,
-                "error": f"Security Violation: Querying table '{table.name}' is forbidden. Only '{settings.ALLOWED_TABLE}' is allowed.",
+                "error": f"Security Violation: Querying table '{table.name}' is forbidden.",
                 "safe_sql": None
             }
 
-    # 5. Enforce LIMIT for Detail Queries
-    # If the query does not contain aggregation (COUNT, SUM) or GROUP BY, it's a detail query
-    has_aggregation = bool(list(parsed.find_all(exp.AggFunc)))
-    has_group_by = bool(parsed.args.get("group"))
+    # 5. HARD ENFORCE LIMIT: Every query must have a limit to prevent DB overload
+    limit_clause = parsed.args.get("limit")
     
-    if not has_aggregation and not has_group_by:
-        limit_clause = parsed.args.get("limit")
-        
-        if not limit_clause:
-            # Auto-inject a LIMIT if the LLM forgot it
-            parsed = parsed.limit(settings.MAX_ROWS_LIMIT)
-        else:
-            # If a limit exists, ensure it doesn't exceed our MAX_ROWS_LIMIT
-            try:
-                # Extract the numeric value of the limit
-                limit_val = int(limit_clause.expression.name)
-                if limit_val > settings.MAX_ROWS_LIMIT:
-                    # Override the limit safely in the AST
-                    parsed.set("limit", exp.Limit(expression=exp.Literal.number(settings.MAX_ROWS_LIMIT)))
-            except (ValueError, AttributeError):
-                # If the limit is a complex expression, we override it to be safe
+    if not limit_clause:
+        # Auto-inject a LIMIT if the LLM forgot it
+        parsed.set("limit", exp.Limit(expression=exp.Literal.number(settings.MAX_ROWS_LIMIT)))
+    else:
+        # If a limit exists, ensure it doesn't exceed our MAX_ROWS_LIMIT
+        try:
+            limit_val = int(limit_clause.expression.name)
+            if limit_val > settings.MAX_ROWS_LIMIT:
                 parsed.set("limit", exp.Limit(expression=exp.Literal.number(settings.MAX_ROWS_LIMIT)))
+        except (ValueError, AttributeError):
+            # If the limit is a complex expression, override it to be safe
+            parsed.set("limit", exp.Limit(expression=exp.Literal.number(settings.MAX_ROWS_LIMIT)))
 
     # Return the clean, safely compiled MySQL string
     return {

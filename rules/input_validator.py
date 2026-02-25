@@ -44,12 +44,12 @@ def validate_user_query(query: str, turn_count: int = 0) -> Dict[str, Any]:
             "options": None
         }
 
-    # 2. Enforce the 1-Turn Clarification Limit
-    if turn_count >= 1:
+    # 2. Relaxed the Clarification Limit for Multi-Turn Context
+    if turn_count >= 10:
         return {
             "is_valid": False,
             "status": "error",
-            "message": "Clarification limit exceeded. Please start a new query with more specific details.",
+            "message": "Conversation limit exceeded. Please start a new query with more specific details.",
             "options": None
         }
 

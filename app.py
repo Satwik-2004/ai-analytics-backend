@@ -12,6 +12,7 @@ from ai.prompt_builder import build_sql_prompt
 from ai.sql_generator import generate_sql
 from db.query_executor import execute_query
 from aggregator.dashboard_aggregator import format_response
+from ai.sql_generator import generate_human_summary
 
 # Initialize the FastAPI App
 app = FastAPI(
@@ -68,6 +69,22 @@ async def process_query(request: QueryRequest):
         raw_sql = await generate_sql(prompt)
         print(f"Attempt {attempt + 1} Generated SQL: {raw_sql}")
         
+        # --- NEW: THE CLARIFICATION INTERCEPTOR ---
+        if raw_sql.strip().upper().startswith("CLARIFY:"):
+            # Strip out the 'CLARIFY:' tag to get just the friendly message
+            clarification_msg = raw_sql[8:].strip()
+            print("Ambiguity Intercepted: Requesting clarification from user.")
+            
+            # Return immediately without hitting the database
+            return QueryResponse(
+                status="success",
+                summary=clarification_msg,
+                charts=[],
+                raw_data=[],
+                insight="Needs clarification"
+            )
+        # ------------------------------------------
+        
         # 4. THE SHIELD: SQL Validation & AST Parsing
         validation = validate_and_format_sql(raw_sql)
         
@@ -79,35 +96,40 @@ async def process_query(request: QueryRequest):
             sql_error = validation["error"]
             print(f"SQL Validation: FAILED - {sql_error}")
 
-        # --- ADD THIS NEW SAFETY NET HERE ---
-        if not safe_sql:
-            print("All AI attempts failed. Aborting query.")
-            return QueryResponse(
-                status="error",
-                summary="I'm sorry, I couldn't safely translate that into a database query. Could you try rephrasing?",
-                insight=sql_error
-            )
-    # ------------------------------------
+    # --- SAFETY NET ---
+    if not safe_sql:
+        print("All AI attempts failed. Aborting query.")
+        return QueryResponse(
+            status="error",
+            summary="I'm sorry, I couldn't safely translate that into a database query. Could you try rephrasing?",
+            insight=sql_error
+        )
 
-        
-
-            
     # 5. THE ENGINE: Database Execution
     print(f"Executing Safe SQL: {safe_sql}")
     is_success, rows, db_error = await run_in_threadpool(execute_query, safe_sql)
 
-    if not is_success:
-        print(f"Database Execution Error: {db_error}")
-        return QueryResponse(
-            status="error",
-            summary="There was a problem retrieving the data from the database.",
-            insight=db_error
-        )
-
-    # 6. THE PRESENTER: Dashboard Aggregation
-    print(f"Rows returned: {len(rows)}")
-    final_payload = format_response(intent, rows)
+    # 6. THE PRESENTER: Dashboard Aggregation & Human Summary
+    print("Generating human-readable summary...")
     
+    # NEW LOGIC: Pass success status and errors directly to the AI for graceful handling
+    safe_rows = rows if is_success else []
+    
+    # Note: Ensure your `generate_human_summary` in `sql_generator.py` accepts the `error_msg` argument!
+    ai_human_text = await generate_human_summary(request.query, safe_rows, error_msg=db_error if not is_success else None)
+    
+    # Get the standard formatted payload
+    final_payload = format_response(intent, safe_rows)
+    
+    # Override the generic hardcoded summary with our new AI intelligence
+    if isinstance(final_payload, dict):
+        final_payload["summary"] = ai_human_text
+    else:
+        final_payload.summary = ai_human_text
+    
+    if not is_success:
+        print(f"Handled Database Error gracefully: {db_error}")
+
     print("--- Request Complete ---\n")
     return final_payload
 

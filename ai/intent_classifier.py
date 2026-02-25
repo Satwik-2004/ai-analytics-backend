@@ -4,7 +4,7 @@ from config import settings
 # Initialize the Async Client to point to Gemini's free API
 client = AsyncOpenAI(
     api_key=settings.LLM_API_KEY,
-    base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
+    base_url="https://api.groq.com/openai/v1"
 )
 
 async def classify_intent(user_query: str) -> str:
