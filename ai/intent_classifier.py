@@ -1,7 +1,7 @@
 from openai import AsyncOpenAI
 from config import settings
 
-# Initialize the Async Client to point to Gemini's free API
+# Initialize the Async Client to point to Groq/Gemini's API
 client = AsyncOpenAI(
     api_key=settings.LLM_API_KEY,
     base_url="https://api.groq.com/openai/v1"
@@ -14,8 +14,9 @@ async def classify_intent(user_query: str) -> str:
     """
     system_prompt = (
         "You are a routing agent. Read the user's query and reply with EXACTLY ONE WORD.\n"
-        "Reply 'SUMMARY' if the user wants counts, totals, charts, or breakdowns (e.g., 'how many', 'by status', 'overview').\n"
-        "Reply 'DETAIL' if the user wants raw data rows (e.g., 'show me tickets', 'list the open ones', 'details for 1234').\n\n"
+        "Reply 'SUMMARY' if the user wants counts, totals, charts, or breakdowns (e.g., 'how many', 'by status', 'distribution', 'overview').\n"
+        "Reply 'DETAIL' if the user wants raw data rows, lists of names, or specific ticket info (e.g., 'show me tickets', 'list the open ones', 'details for ID 123', 'give me details of these').\n\n"
+        "CRITICAL: If the query contains a '[PREVIOUS CONTEXT]' block, IGNORE IT. Classify the intent based ONLY on the text under '[CURRENT USER REQUEST]'.\n\n"
         "DO NOT use markdown. DO NOT explain. JUST ONE WORD: SUMMARY or DETAIL."
     )
 

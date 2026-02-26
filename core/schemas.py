@@ -7,6 +7,8 @@ from typing import List, Dict, Any, Optional, Union
 class QueryRequest(BaseModel):
     query: str = Field(..., min_length=2, description="The natural language query from the user")
     turn_count: int = Field(default=0, description="Tracks clarification loops to enforce the max 1 turn limit")
+    # NEW: Accepts the current search state from React
+    state: Optional[Dict[str, Any]] = Field(default=None, description="The current active JSON search state")
 
 # -------------------------------------------------------------------
 # RESPONSE SCHEMAS (What the backend sends to React)
@@ -31,3 +33,6 @@ class QueryResponse(BaseModel):
     
     # Used ONLY if status is 'clarification_required'
     options: Optional[List[str]] = None
+    
+    # NEW: Returns the updated search state to React
+    state: Optional[Dict[str, Any]] = Field(default=None, description="The newly updated JSON search state")

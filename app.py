@@ -7,24 +7,23 @@ from fastapi.concurrency import run_in_threadpool
 from core.schemas import QueryRequest, QueryResponse
 from rules.input_validator import validate_user_query
 from rules.sql_validator import validate_and_format_sql
-from ai.intent_classifier import classify_intent
+from ai.state_manager import update_state  # NEW: Our JSON State Manager
 from ai.prompt_builder import build_sql_prompt
-from ai.sql_generator import generate_sql
+from ai.sql_generator import generate_sql, generate_human_summary
 from db.query_executor import execute_query
 from aggregator.dashboard_aggregator import format_response
-from ai.sql_generator import generate_human_summary
 
 # Initialize the FastAPI App
 app = FastAPI(
     title="Corporate Tickets AI Analytics",
-    description="Internal V1 NL-to-SQL Engine",
-    version="1.0.0"
+    description="Stateful V4 NL-to-SQL Engine",
+    version="4.0.0"
 )
 
-# Configure CORS so your local React app (usually on port 3000 or 5173) can communicate with it
+# Configure CORS so your local React app can communicate with it
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # Note: In production, change "*" to your actual React app URL
+    allow_origins=["*"], 
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -33,7 +32,7 @@ app.add_middleware(
 @app.post("/api/v1/query", response_model=QueryResponse)
 async def process_query(request: QueryRequest):
     """
-    The main endpoint. Converts a natural language query into a structured dashboard response.
+    The main endpoint. Converts a natural language query into a structured dashboard response using Stateful Memory.
     """
     print(f"\n--- New Request: '{request.query}' ---")
 
@@ -44,21 +43,26 @@ async def process_query(request: QueryRequest):
         return QueryResponse(
             status=validation_result["status"],
             summary=validation_result["message"],
-            options=validation_result.get("options")
+            options=validation_result.get("options"),
+            state=request.state # Return existing state unchanged
         )
 
-    # 2. THE BRAIN: Intent Classification
-    intent = await classify_intent(request.query)
-    print(f"Detected Intent: {intent.upper()}")
+    # 2. THE BRAIN: State Management
+    # Pass the user query and the previous state from the frontend to update it
+    new_state = await update_state(request.query, request.state)
+    print(f"Active Search State: {new_state}")
+    
+    # Extract intent for later use in dashboard formatting
+    intent = new_state.get("intent", "detail")
 
-    # 3. THE BRAIN: Prompt Building & SQL Generation (With 1 Retry Loop)
+    # 3. THE BUILDER: Prompt Building & SQL Generation (With 1 Retry Loop)
     max_retries = 1
     safe_sql = None
     sql_error = None
 
     for attempt in range(max_retries + 1):
-        # Build prompt
-        prompt = build_sql_prompt(request.query, intent)
+        # Pass the entire new_state dictionary to strictly enforce filters
+        prompt = build_sql_prompt(request.query, new_state)
         
         # SELF-HEALING AI: If this is a retry, feed the error back to the AI!
         if attempt > 0 and sql_error:
@@ -69,19 +73,30 @@ async def process_query(request: QueryRequest):
         raw_sql = await generate_sql(prompt)
         print(f"Attempt {attempt + 1} Generated SQL: {raw_sql}")
         
-        # --- NEW: THE CLARIFICATION INTERCEPTOR ---
+        # --- TEXT INTERCEPTOR BYPASS ---
+        # 1. Catch missing timeframes / clarification requests
         if raw_sql.strip().upper().startswith("CLARIFY:"):
-            # Strip out the 'CLARIFY:' tag to get just the friendly message
-            clarification_msg = raw_sql[8:].strip()
+            clarification_msg = raw_sql.strip()[8:].strip()
             print("Ambiguity Intercepted: Requesting clarification from user.")
-            
-            # Return immediately without hitting the database
             return QueryResponse(
                 status="success",
                 summary=clarification_msg,
                 charts=[],
                 raw_data=[],
-                insight="Needs clarification"
+                insight="Needs clarification",
+                state=new_state # Return the updated state
+            )
+            
+        # 2. Catch finance security boundaries
+        elif raw_sql.strip().startswith("I do not have access"):
+            print("Security Boundary Intercepted: Blocked finance query.")
+            return QueryResponse(
+                status="success",
+                summary=raw_sql.strip(),
+                charts=[],
+                raw_data=[],
+                insight="Security Block",
+                state=new_state # Return the updated state
             )
         # ------------------------------------------
         
@@ -102,7 +117,8 @@ async def process_query(request: QueryRequest):
         return QueryResponse(
             status="error",
             summary="I'm sorry, I couldn't safely translate that into a database query. Could you try rephrasing?",
-            insight=sql_error
+            insight=sql_error,
+            state=new_state # Still return state so the user doesn't lose context on a fail
         )
 
     # 5. THE ENGINE: Database Execution
@@ -112,20 +128,26 @@ async def process_query(request: QueryRequest):
     # 6. THE PRESENTER: Dashboard Aggregation & Human Summary
     print("Generating human-readable summary...")
     
-    # NEW LOGIC: Pass success status and errors directly to the AI for graceful handling
     safe_rows = rows if is_success else []
     
-    # Note: Ensure your `generate_human_summary` in `sql_generator.py` accepts the `error_msg` argument!
-    ai_human_text = await generate_human_summary(request.query, safe_rows, error_msg=db_error if not is_success else None)
+    # NEW: We pass the active state into the summary generator so it knows the domain
+    ai_human_text = await generate_human_summary(
+        request.query, 
+        safe_rows, 
+        state=new_state, 
+        error_msg=db_error if not is_success else None
+    )
     
-    # Get the standard formatted payload
+    # Format the data (charts, KPIs, rows)
     final_payload = format_response(intent, safe_rows)
     
-    # Override the generic hardcoded summary with our new AI intelligence
+    # Attach the summary and the active state to the final response
     if isinstance(final_payload, dict):
         final_payload["summary"] = ai_human_text
+        final_payload["state"] = new_state
     else:
         final_payload.summary = ai_human_text
+        final_payload.state = new_state
     
     if not is_success:
         print(f"Handled Database Error gracefully: {db_error}")
@@ -133,6 +155,5 @@ async def process_query(request: QueryRequest):
     print("--- Request Complete ---\n")
     return final_payload
 
-# This allows you to run the file directly from the terminal
 if __name__ == "__main__":
     uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
