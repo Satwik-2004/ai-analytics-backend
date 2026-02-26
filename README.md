@@ -1,127 +1,119 @@
-# 🏢 Corporate Tickets AI Analytics (Backend V1)
+# Corporate Tickets AI Analytics (Backend V2)
 
-An enterprise-grade, Natural Language-to-SQL (NL2SQL) AI agent built with FastAPI. This engine allows users to ask questions about corporate ticket data in plain English and returns securely generated, validated database queries formatted for dynamic frontend dashboard rendering.
+* Enterprise-grade, Natural Language-to-SQL (NL2SQL) AI agent built with FastAPI
+* Allows users to ask questions about corporate ticket data in plain English
+* Returns securely generated, validated database queries formatted for dynamic frontend dashboard rendering
 
-## ✨ Key Features
+## Key Features
 
-* **🧠 Intelligent Intent Routing:** Automatically classifies user queries into `SUMMARY` (aggregations, charts) or `DETAIL` (raw rows) to optimize database load and UI presentation.
-* **🛡️ AST SQL Validator (The Shield):** Parses AI-generated SQL using Abstract Syntax Trees (`sqlglot`) before execution. It strictly enforces read-only operations (blocks `DROP`, `DELETE`, `UPDATE`), restricts queries to authorized tables, and enforces `LIMIT` clauses.
-* **⚕️ Self-Healing Retry Loop:** If the AI generates malformed SQL, the system catches the error and feeds it back to the LLM for automatic correction before failing.
-* **📊 Auto-Dashboard Aggregation:** Transforms raw MySQL rows into structured JSON payloads containing KPIs, Chart Configurations (Bar, Pie, etc.), and Raw Data arrays ready for immediate frontend rendering.
+* Intelligent Intent Routing: Automatically classifies user queries into SUMMARY or DETAIL to optimize database load and UI presentation
+* AST SQL Validator: Parses AI-generated SQL using Abstract Syntax Trees to strictly enforce read-only operations, block DoS functions, and enforce hard limits
+* Self-Healing Retry Loop: Catches malformed SQL errors and feeds them back to the LLM for automatic correction before failing
+* Auto-Dashboard Aggregation: Transforms raw MySQL rows into structured JSON payloads containing KPIs, Chart Configurations, and Raw Data arrays
+* Two-Pass AI Summary Engine: Dynamically generates conversational, human-readable text explaining the data or gracefully handling database errors
+* Clarification Interceptor: Catches ambiguous queries or missing timeframes and prompts the user for context before executing operations
+* Short-Term Memory: Handles conversational follow-ups by intelligently merging original requests, clarifications, and user replies
+* Multi-Table Relational Support: Fully supports complex JOIN operations across 12 database tables including history, finance, and quotations
 
-## 🛠️ Tech Stack
+## Tech Stack
 
-* **Framework:** Python 3.x, FastAPI, Uvicorn
-* **AI / LLM:** Google Gemini (via OpenAI Python SDK compatibility layer)
-* **Database:** MySQL / PyMySQL
-* **Security:** SQLGlot (AST Parsing)
+* Framework: Python 3.x, FastAPI, Uvicorn
+* AI / LLM: Google Gemini (via OpenAI Python SDK compatibility layer)
+* Database: MySQL, PyMySQL, Cryptography (for MySQL 8.0+ caching_sha2_password)
+* Security: SQLGlot (AST Parsing)
 
-## 📁 Architecture & Folder Structure
+## Architecture & Folder Structure
+
 ```text
 ai-analytics-backend/
-├── app.py                 # The main FastAPI application and retry loop
-├── config.py              # Environment variable management
+├── app.py                 # The main FastAPI application, retry loop, and interceptor
+├── config.py              # Environment variable management and allowed tables
 ├── requirements.txt       # Python dependencies
 ├── ai/                    # "The Brain"
 │   ├── intent_classifier.py # Routes query as SUMMARY vs DETAIL
-│   ├── prompt_builder.py    # Injects database schema and strict rules
-│   └── sql_generator.py     # Calls the LLM to generate raw SQL
+│   ├── prompt_builder.py    # Injects 12-table database schema and strict rules
+│   └── sql_generator.py     # Calls the LLM to generate SQL and human summaries
 ├── rules/                 # "The Shield"
-│   ├── input_validator.py   # Sanitizes user input before AI processing
+│   ├── input_validator.py   # Sanitizes user input and manages conversation turn limits
 │   └── sql_validator.py     # Parses AST to ensure secure, read-only SQL
 ├── db/                    # "The Engine"
 │   └── query_executor.py    # Safely executes validated SQL against MySQL
 ├── aggregator/            # "The Presenter"
 │   └── dashboard_aggregator.py # Formats data into charts and KPIs
 └── tests/                 # Unit testing suite
+
 ```
 
-## 🚀 Installation & Setup
+## Installation & Setup
 
-### 1. Clone the repository
-```bash
-git clone https://github.com/YourUsername/ai-analytics-backend.git
-cd ai-analytics-backend
-```
+* Clone the repository using git clone
+* Create and activate a Python virtual environment
+* Install dependencies using pip install -r requirements.txt
+* Create a .env file in the root directory for configuration variables
 
-### 2. Create and activate a virtual environment
-```bash
-# Windows
-python -m venv venv
-.\venv\Scripts\activate
+## Environment Variables
 
-# Mac/Linux
-python3 -m venv venv
-source venv/bin/activate
-```
-
-### 3. Install dependencies
-```bash
-pip install -r requirements.txt
-```
-
-### 4. Environment Variables
-
-Create a `.env` file in the root directory. **(Do not commit this file to Git)**:
 ```env
 # AI Configuration
-LLM_PROVIDER=gemini
+LLM_PROVIDER=your_provider
 LLM_API_KEY=your_api_key_here
-LLM_MODEL=gemini-flash-latest
+LLM_MODEL=your_model
 
 # Database Configuration
 DB_HOST=localhost
 DB_PORT=3306
-DB_USER=root
+DB_USER=your_user
 DB_PASSWORD=your_password
-DB_NAME=techxpertindia
+DB_NAME=your_db
 
 # Security Limits
-ALLOWED_TABLE=corporate_tickets
 MAX_ROWS_LIMIT=500
+
 ```
 
-## 💻 Running the Application
-```bash
-python app.py
-```
+## Running the Application
 
-* **API URL:** http://localhost:8000/api/v1/query
-* **Swagger UI:** http://localhost:8000/docs
+* Start the application by running python app.py
+* Access the API endpoint at http://localhost:8000/api/v1/query
+* Access the Swagger UI documentation at http://localhost:8000/docs
 
-## 📡 API Usage
+## API Usage
 
-**Endpoint:** `POST /api/v1/query`
+* Endpoint: POST /api/v1/query
+* Request Body:
 
-**Request Body:**
 ```json
 {
-  "query": "Show me a breakdown of all tickets by their status.",
+  "query": "What is the total number of closed tickets last month?",
   "turn_count": 0
 }
+
 ```
 
-**Successful Response:**
+* Successful Response:
+
 ```json
 {
   "status": "success",
-  "summary": "Here are your results.",
+  "summary": "There were 189 closed tickets in the last month across various service categories.",
   "kpis": [],
   "charts": [
     {
       "type": "bar",
       "title": "Data Distribution",
-      "labels": ["Open", "Closed", "Pending"],
-      "values": [45, 120, 15]
+      "labels": ["Closed"],
+      "values": [189]
     }
   ],
   "raw_data": [],
   "insight": null,
   "options": null
 }
+
 ```
 
-## 🛣️ Future Roadmap (V2)
+## Future Roadmap (V3)
 
-* **Multi-Table Support:** Expanding the schema dictionary and updating the AST parser to support secure JOIN operations across 12+ relational tables.
-* **Dynamic Charting:** Enhancing the chart selector to support Line charts for time-series data and Pie charts for percentage distributions.
+* Implement Role-Based Access Control to restrict data retrieval based on specific user permissions
+* Add a caching layer using Redis to serve frequent analytical queries instantly
+* Develop agentic workflows for automated weekly report generation and email distribution
