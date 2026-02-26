@@ -1,119 +1,143 @@
-# Corporate Tickets AI Analytics (Backend V2)
+# Corporate Tickets AI Analytics — Backend V3
 
-* Enterprise-grade, Natural Language-to-SQL (NL2SQL) AI agent built with FastAPI
-* Allows users to ask questions about corporate ticket data in plain English
-* Returns securely generated, validated database queries formatted for dynamic frontend dashboard rendering
+> Enterprise-grade, stateful Natural Language-to-SQL (NL2SQL) AI agent built with FastAPI.
+
+Ask questions about corporate and PPM ticket data in plain English. The engine remembers context across turns, enforces strict security boundaries, and returns validated SQL results formatted for dynamic dashboard rendering.
+
+---
 
 ## Key Features
 
-* Intelligent Intent Routing: Automatically classifies user queries into SUMMARY or DETAIL to optimize database load and UI presentation
-* AST SQL Validator: Parses AI-generated SQL using Abstract Syntax Trees to strictly enforce read-only operations, block DoS functions, and enforce hard limits
-* Self-Healing Retry Loop: Catches malformed SQL errors and feeds them back to the LLM for automatic correction before failing
-* Auto-Dashboard Aggregation: Transforms raw MySQL rows into structured JSON payloads containing KPIs, Chart Configurations, and Raw Data arrays
-* Two-Pass AI Summary Engine: Dynamically generates conversational, human-readable text explaining the data or gracefully handling database errors
-* Clarification Interceptor: Catches ambiguous queries or missing timeframes and prompts the user for context before executing operations
-* Short-Term Memory: Handles conversational follow-ups by intelligently merging original requests, clarifications, and user replies
-* Multi-Table Relational Support: Fully supports complex JOIN operations across 12 database tables including history, finance, and quotations
+- **Stateful Memory** — A deterministic JSON State Tracker replaces raw chat history, remembering domain, company, branch, and timeframe across turns until explicitly cleared.
+- **Anti-Hallucination Guardrails** — Strict prompt boundaries prevent the LLM from crossing column definitions between corporate and PPM domains.
+- **Readable Data Enforcement** — Automatic JOINs on organizational tables ensure results always return human-readable names instead of raw numeric IDs.
+- **Intelligent Domain Routing** — Auto-detects whether the query targets General Corporate Tickets or PPM and scopes SQL accordingly.
+- **AST SQL Validator** — Parses AI-generated SQL via Abstract Syntax Trees to enforce read-only operations, block DoS functions, and cap row limits.
+- **Self-Healing Retry Loop** — Catches malformed SQL and feeds errors back to the LLM for automatic correction before failing.
+- **State-Aware Summary Engine** — Generates conversational, human-readable responses reflecting active filters, with graceful fallback on rate-limit or timeout.
+- **Multi-Domain Relational Support** — Full LEFT JOIN support across 17 tables in 3 hierarchical domains: Corporate, PPM, and Organizational.
+
+---
 
 ## Tech Stack
 
-* Framework: Python 3.x, FastAPI, Uvicorn
-* AI / LLM: Google Gemini (via OpenAI Python SDK compatibility layer)
-* Database: MySQL, PyMySQL, Cryptography (for MySQL 8.0+ caching_sha2_password)
-* Security: SQLGlot (AST Parsing)
+| Layer | Technology |
+|---|---|
+| Framework | Python 3.x, FastAPI, Uvicorn |
+| AI / LLM | Groq / Google Gemini (OpenAI SDK compatible) |
+| Database | MySQL, PyMySQL, Cryptography |
+| Security | SQLGlot (AST Parsing) |
 
-## Architecture & Folder Structure
+---
 
-```text
+## Project Structure
+```
 ai-analytics-backend/
-├── app.py                 # The main FastAPI application, retry loop, and interceptor
-├── config.py              # Environment variable management and allowed tables
-├── requirements.txt       # Python dependencies
-├── ai/                    # "The Brain"
-│   ├── intent_classifier.py # Routes query as SUMMARY vs DETAIL
-│   ├── prompt_builder.py    # Injects 12-table database schema and strict rules
-│   └── sql_generator.py     # Calls the LLM to generate SQL and human summaries
-├── rules/                 # "The Shield"
-│   ├── input_validator.py   # Sanitizes user input and manages conversation turn limits
-│   └── sql_validator.py     # Parses AST to ensure secure, read-only SQL
-├── db/                    # "The Engine"
-│   └── query_executor.py    # Safely executes validated SQL against MySQL
-├── aggregator/            # "The Presenter"
-│   └── dashboard_aggregator.py # Formats data into charts and KPIs
-└── tests/                 # Unit testing suite
-
+├── app.py                        # Main FastAPI app, state injector, retry loop
+├── config.py                     # Environment variables and allowed tables
+├── requirements.txt
+├── ai/                           # "The Brain"
+│   ├── state_manager.py          # Extracts intent, maintains JSON filter state
+│   ├── prompt_builder.py         # Injects 17-table schema, enforces active state rules
+│   └── sql_generator.py          # LLM calls for SQL and state-aware summaries
+├── rules/                        # "The Shield"
+│   ├── input_validator.py        # Sanitizes input, blocks malicious prompts
+│   └── sql_validator.py          # AST-based read-only SQL enforcement
+├── db/
+│   └── query_executor.py         # Executes validated SQL against MySQL
+├── aggregator/
+│   └── dashboard_aggregator.py   # Formats results into charts and KPIs
+└── tests/
 ```
 
-## Installation & Setup
+---
 
-* Clone the repository using git clone
-* Create and activate a Python virtual environment
-* Install dependencies using pip install -r requirements.txt
-* Create a .env file in the root directory for configuration variables
+## Installation
+```bash
+git clone <repository-url>
+cd ai-analytics-backend
+python -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
+```
 
-## Environment Variables
+### Environment Variables
 
+Create a `.env` file in the root directory:
 ```env
-# AI Configuration
+# AI
 LLM_PROVIDER=your_provider
 LLM_API_KEY=your_api_key_here
-LLM_MODEL=your_model
+LLM_MODEL=llama-3.3-70b-versatile
 
-# Database Configuration
+# Database
 DB_HOST=localhost
 DB_PORT=3306
 DB_USER=your_user
 DB_PASSWORD=your_password
 DB_NAME=your_db
 
-# Security Limits
+# Limits
 MAX_ROWS_LIMIT=500
-
 ```
 
-## Running the Application
+### Run
+```bash
+python app.py
+```
 
-* Start the application by running python app.py
-* Access the API endpoint at http://localhost:8000/api/v1/query
-* Access the Swagger UI documentation at http://localhost:8000/docs
+- API: `http://localhost:8000/api/v1/query`
+- Docs: `http://localhost:8000/docs`
 
-## API Usage
+---
 
-* Endpoint: POST /api/v1/query
-* Request Body:
+## API Reference
 
+**`POST /api/v1/query`**
+
+**Request:**
 ```json
 {
-  "query": "What is the total number of closed tickets last month?",
-  "turn_count": 0
+  "query": "What about the Mumbai branch?",
+  "turn_count": 0,
+  "state": {
+    "intent": "summary",
+    "domain": "ppm_tickets",
+    "company_name": "Maruti Suzuki",
+    "branch_name": null,
+    "timeframe": "January 2026",
+    "status": null,
+    "priority": null,
+    "service_type": null
+  }
 }
-
 ```
 
-* Successful Response:
-
+**Response:**
 ```json
 {
   "status": "success",
-  "summary": "There were 189 closed tickets in the last month across various service categories.",
-  "kpis": [],
-  "charts": [
-    {
-      "type": "bar",
-      "title": "Data Distribution",
-      "labels": ["Closed"],
-      "values": [189]
-    }
+  "summary": "Here is the breakdown of PPM tickets for Maruti Suzuki in the Mumbai branch...",
+  "raw_data": [
+    { "CurrentStatus": "Closed", "COUNT(pt.TicketID)": 120 },
+    { "CurrentStatus": "Assigned", "COUNT(pt.TicketID)": 3 }
   ],
-  "raw_data": [],
-  "insight": null,
-  "options": null
+  "state": {
+    "intent": "summary",
+    "domain": "ppm_tickets",
+    "company_name": "Maruti Suzuki",
+    "branch_name": "Mumbai",
+    "timeframe": "January 2026",
+    "status": null,
+    "priority": null,
+    "service_type": null
+  }
 }
-
 ```
 
-## Future Roadmap (V3)
+---
 
-* Implement Role-Based Access Control to restrict data retrieval based on specific user permissions
-* Add a caching layer using Redis to serve frequent analytical queries instantly
-* Develop agentic workflows for automated weekly report generation and email distribution
+## Roadmap (V4)
+
+- [ ] **RBAC** — Tenant-level isolation restricting data by logged-in user's corporate or branch permissions
+- [ ] **Redis Caching** — Query caching for frequent or heavy analytical requests
+- [ ] **Proactive Agents** — Background agents for weekly report generation, anomaly detection, and email distribution
