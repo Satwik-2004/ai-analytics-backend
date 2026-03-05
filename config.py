@@ -47,7 +47,8 @@ class Settings:
         "corporate",
         "company",
         "branch",
-        "branch_assets"
+        "branch_assets",
+        "employees"
     ]
 
 settings = Settings()

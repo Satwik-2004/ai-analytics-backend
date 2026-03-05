@@ -7,7 +7,7 @@ def format_response(
     rows: List[Dict[str, Any]], 
     sql_error: str = "", 
     summary_text: str = "Here are your results."
-) -> QueryResponse: # <--- Update type hint
+) -> QueryResponse: 
     
     if sql_error:
         return QueryResponse(
@@ -28,7 +28,8 @@ def format_response(
             status="success",
             summary=summary_text,
             kpis=kpis,
-            charts=charts
+            charts=charts,
+            raw_data=rows # <--- FIXED: Now the frontend gets the data to draw the table/charts!
         )
 
     else:

@@ -21,7 +21,7 @@ async def generate_sql(prompt: str) -> str:
                 {"role": "user", "content": prompt}
             ],
             temperature=0.0,
-            max_tokens=1500, # Increased from 300 to allow complex JOINs
+            max_tokens=1500, 
             top_p=1.0
         )
         
@@ -37,12 +37,14 @@ async def generate_sql(prompt: str) -> str:
 async def generate_human_summary(user_query: str, raw_data: list, state: dict = None, error_msg: str = None) -> str:
     """
     Generates a conversational summary of the data. 
-    Now strictly aware of the active JSON State to prevent mislabeling ticket types.
+    Now strictly aware of the active JSON State and the dynamic shape of the data.
     """
     # 1. STATE-AWARE NAMING: Check the memory to know exactly what we are looking at.
     domain = state.get("domain", "") if state else ""
-    ticket_type = "PPM tickets" if "ppm" in domain.lower() else "corporate tickets"
-
+    # Fallback to corporate_tickets if domain is completely None/Empty
+    safe_domain = domain or "corporate_tickets" 
+    ticket_type = "PPM tickets" if "ppm" in safe_domain.lower() else "corporate tickets"
+    
     if error_msg or not raw_data:
         prompt = f"""
         You are a helpful data assistant.
@@ -60,16 +62,20 @@ async def generate_human_summary(user_query: str, raw_data: list, state: dict = 
         prompt = f"""
         You are a helpful, professional corporate data assistant. 
         The user asked: "{user_query}"
-        The database returned {row_count} rows of {ticket_type}. 
-        Here is a sample of the raw data: {data_sample}
+        The database returned a result set containing {row_count} rows. 
+        Here is a sample of the top records in the data: {data_sample}
         
-        Write a 2 to 3 sentence conversational summary of this data to answer the user's question. 
-        If it is a specific ticket, mention its current status and a brief note about its history.
+        Write a 2 to 3 sentence conversational summary of this data. 
         
-        CRITICAL NAMING RULES (DO NOT IGNORE):
-        1. You MUST refer to the data explicitly as "{ticket_type}". NEVER guess the ticket type.
-        2. If the user filtered by a specific Branch or Company name, you MUST explicitly mention that exact name in your summary.
-        3. THE DRILL-DOWN INVITE: If the data is a summary/breakdown (like a count by company, status, or branch), end your response by inviting the user to zoom in. (e.g., "If you'd like to see the specific details or zoom in on a particular company, just let me know!")
+        CRITICAL NAMING RULES:
+        1. DYNAMIC CONTEXT (Total Count vs Top Results): 
+           - IF the data sample contains a column like `TotalTickets` or `TotalCount` and NO grouping names, this is a GRAND TOTAL. State the exact number from the sample (e.g., "There are a total of X {ticket_type} matching your search.").
+           - IF the data contains `TicketID`, say "We fetched {row_count} individual {ticket_type} records..."
+           - IF the data contains grouped columns (like CompanyName or BranchSite), say "We found {row_count} unique branches/companies..." and highlight the top 1 or 2 results from the sample data.
+        2. THE LIMIT WARNING (CRITICAL):
+           - If {row_count} is exactly {settings.MAX_ROWS_LIMIT} (or exactly 500), explicitly tell the user: "Note: We fetched the maximum display limit of {settings.MAX_ROWS_LIMIT} results, but there may be more in the database."
+        3. NO MATH ALLOWED: NEVER attempt to add, sum, or calculate totals from the data yourself. 
+        4. TOP RESULTS: State the highest/top result factually based ONLY on the numbers provided.
         
         Do not use markdown formatting. Do not output the raw JSON.
         """
