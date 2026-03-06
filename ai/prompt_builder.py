@@ -69,26 +69,12 @@ def build_sql_prompt(user_query: str, state: dict) -> str:
     intent = state.get("intent", "detail")
     target_domain = state.get('domain') or 'corporate_tickets'
     
-    # Check if there are ANY specific filters applied in the current state
-    has_filters = any([
-        state.get('company_name'),
-        state.get('branch_name'),
-        state.get('timeframe'),
-        state.get('status'),
-        state.get('priority'),
-        state.get('service_type')
-    ])
-    
     # Dynamically determine the exact base table, alias, and the correct DATE COLUMN
     base_table = "ppm_tickets pt" if "ppm" in target_domain.lower() else "corporate_tickets ct"
     ticket_alias = "pt" if "ppm" in target_domain.lower() else "ct"
-    date_col = "CreatedDate" # Based on your previous business logic decision
     
-    # NEW: The highly professional Dynamic Vague Search Interceptor
-    if intent == "detail" and not has_filters:
-        vague_rule = "2. THE \"VAGUE SEARCH\" INTERCEPTOR (TRIGGERED): The user is asking for ticket details, but there are NO active filters in the state. Querying without filters will dump the entire database. You are STRICTLY FORBIDDEN from writing SQL. You MUST reply EXACTLY with this string: `CLARIFY: I can certainly help you explore those tickets! Since there are a large number of records, could you help me narrow it down? You can filter by a specific Company Name, Timeframe (e.g., 'last month'), or Status (e.g., 'open').`"
-    else:
-        vague_rule = "2. THE \"VAGUE SEARCH\" INTERCEPTOR: If the user explicitly asks to search but provides no filter criteria, DO NOT write SQL. Instead, reply EXACTLY with this string: `CLARIFY: I can certainly help you explore those tickets! Since there are a large number of records, could you help me narrow it down? You can filter by a specific Company Name, Timeframe (e.g., 'last month'), or Status (e.g., 'open').`"
+    # NEW: Strictly use PPMDate for PPM domain, CreatedDate for Corporate
+    date_col = "PPMDate" if "ppm" in target_domain.lower() else "CreatedDate"
         
     base_instructions = f"""You are an elite MySQL data analyst. 
 Convert the user's natural language request into a highly optimized, read-only SELECT query.
@@ -97,20 +83,22 @@ Convert the user's natural language request into a highly optimized, read-only S
 
 CRITICAL RULES:
 1. STRICT SECURITY BOUNDARY (SUPERSEDES ALL): You do NOT have access to finance, billing, quotation, or payment tables. If requested, DO NOT write SQL. Output exactly: `I do not have access to financial or billing records for security reasons.`
-{vague_rule}
-3. OUTPUT FORMAT: Output ONLY raw valid SQL. No markdown formatting, no `sql` tags, and absolutely NO conversational filler.
-4. ALWAYS USE ALIASES: Use table aliases for every column (e.g., `{ticket_alias}.TicketID`, NOT `TicketID`).
-5. LIMIT RESULTS: Always append `LIMIT 500` to prevent massive data dumps.
-6. MANDATORY BASE TABLE (CRITICAL FIX): You are FORBIDDEN from writing `FROM company`, `FROM corporate`, or `FROM branch`. Your query MUST begin EXACTLY with: `FROM {base_table}`. To get a list of companies or branches, you MUST query `{base_table}` and `LEFT JOIN` the company/branch tables!
-7. VALID JOINS ONLY (CRITICAL KEY MAPPINGS): 
+2. OUTPUT FORMAT: Output ONLY raw valid SQL. No markdown formatting, no `sql` tags, and absolutely NO conversational filler.
+3. ALWAYS USE ALIASES: Use table aliases for every column (e.g., `{ticket_alias}.TicketID`, NOT `TicketID`).
+4. LIMIT RESULTS: Always append `LIMIT 500` to prevent massive data dumps.
+5. MANDATORY BASE TABLE (CRITICAL FIX): You are FORBIDDEN from writing `FROM company`, `FROM corporate`, or `FROM branch`. Your query MUST begin EXACTLY with: `FROM {base_table}`. To get a list of companies or branches, you MUST query `{base_table}` and `LEFT JOIN` the company/branch tables!
+6. VALID JOINS ONLY (CRITICAL KEY MAPPINGS): 
     - For standard tables, join on the indicated Foreign Keys.
     - PPM SERVICE REPORTS FIX: Tables like `ppm_hvac_service_report`, `ppm_ep_service_report`, etc., have a `TicketID` column that is an INT. This references `ppm_tickets.ID` (the integer primary key). You MUST join them like this: `JOIN ppm_hvac_service_report ON ppm_hvac_service_report.TicketID = ppm_tickets.ID`.
-8. NO COLUMN HALLUCINATION: Only use exact columns listed in the schema. CRITICAL: Do not ask for `Type`, `Service`, `Subservice`, or `Price` when querying `ppm_tickets`.
-9. NEVER USE `*` WITH JOINS: Explicitly select relevant columns from both tables.
-10. AMBIGUOUS STATUS: Always alias Status columns when joining (e.g., `{ticket_alias}.Status AS CurrentStatus`).
-11. RANKING/SORTING: If asked for "most expensive" or "highest", you MUST use `ORDER BY [ColumnName] DESC`.
-12. ZERO ASSUMPTIONS: Do NOT guess. Do not add `WHERE` clauses for Status, Service, or Priority unless explicitly stated in the User Query or Active Search State.
-13. INTELLIGENT TIMEFRAMES: The primary date column for this domain is `{ticket_alias}.{date_col}`. TODAY'S REFERENCE DATE: March 5, 2026. Use `DATE_SUB()` for rolling days and `MONTH()/YEAR()` for calendar months on the `{ticket_alias}.{date_col}` column.
+7. NO COLUMN HALLUCINATION: Only use exact columns listed in the schema. CRITICAL: Do not ask for `Type`, `Service`, `Subservice`, or `Price` when querying `ppm_tickets`.
+8. NEVER USE `*` WITH JOINS: Explicitly select relevant columns from both tables.
+9. AMBIGUOUS STATUS: Always alias Status columns when joining (e.g., `{ticket_alias}.Status AS CurrentStatus`).
+10. RANKING/SORTING: If asked for "most expensive" or "highest", you MUST use `ORDER BY [ColumnName] DESC`.
+11. ZERO ASSUMPTIONS: Do NOT guess. Do not add `WHERE` clauses for Status, Service, or Priority unless explicitly stated in the User Query or Active Search State.
+12. INTELLIGENT TIMEFRAMES (VARCHAR DATE FIX): The `{ticket_alias}.{date_col}` column is stored as a VARCHAR string, NOT a strict SQL DATE. 
+    - CRITICAL: DO NOT USE `MONTH()` or `YEAR()` directly on this column. It will fail and return 0 rows.
+    - Instead, use `LIKE` with wildcards for safe string matching. For example, for December 2025, use: `WHERE ({ticket_alias}.{date_col} LIKE '%-12-2025' OR {ticket_alias}.{date_col} LIKE '2025-12-%')`.
+    - TODAY'S REFERENCE DATE: March 6, 2026.
 
 === ACTIVE SEARCH STATE (CRITICAL) ===
 This state represents the ABSOLUTE TRUTH of the current filters. Even if the user's latest text query does not mention a filter, if it has a value in this state, YOU MUST APPLY IT using a `WHERE` clause. Do not ignore the state.
@@ -122,31 +110,32 @@ This state represents the ABSOLUTE TRUTH of the current filters. Even if the use
 - Priority: {state.get('priority')}
 - Service Category: {state.get('service_type')}
 
-14. STATE ENFORCEMENT RULES:
-    - TIMEFRAME (CRITICAL): If the Timeframe state is not None, you MUST add a `WHERE` clause using `{ticket_alias}.{date_col}` (e.g., `WHERE YEAR({ticket_alias}.{date_col}) = 2025`).
+13. STRICT STATE ENFORCEMENT RULES (DO NOT SKIP):
+    - FATAL ERROR PREVENTION: If a filter above is NOT 'None', you MUST write both the `JOIN` and the `WHERE` clause. Never use a column like `branch.BranchSite` or `company.CompanyName` in your query if you did not explicitly write the `JOIN` command for that table first!
+    - TIMEFRAME: If the Timeframe state is not None, you MUST add a `WHERE` clause using `{ticket_alias}.{date_col}` (e.g., `WHERE {ticket_alias}.{date_col} LIKE '%2025%'`).
     - COMPANY: If Company Name is provided, you MUST `LEFT JOIN company` (ON {ticket_alias}.CorporateID = company.ID) AND `LEFT JOIN corporate` (ON company.CorporateName = corporate.ID) BEFORE using them in the WHERE clause. Then filter using: `(corporate.CorporateName LIKE '%[Name]%' OR company.CompanyName LIKE '%[Name]%')`.
-    - BRANCH: If Branch Name is provided, JOIN `branch` (ON {ticket_alias}.BranchID = branch.ID). 
+    - BRANCH: If Branch Name is provided, you MUST `LEFT JOIN branch` (ON {ticket_alias}.BranchID = branch.ID) BEFORE filtering by branch. 
     - ANTI-SPELLING BUG (CRITICAL WILDCARDS): When filtering Branch or Company names with LIKE, use only the first 4 letters of the word, and wrap it in `%` (e.g., `LIKE '%Mumb%'`).
     - PPM SERVICE ROUTING: If Service Category is provided for PPM tickets (e.g., HVAC, Electrical), you MUST `INNER JOIN` the corresponding service report table (e.g., `ppm_hvac_service_report`) ON `report_table.TicketID = ppm_tickets.ID` to filter the results. YOU MUST DO THIS IF IT IS IN THE STATE.
     - CORPORATE TYPE VS SERVICE ROUTING: If the domain is `corporate_tickets` and a Service Category is provided in the state:
         * If the value is 'AMC', 'R&M', 'Supply', 'Projects', or 'Booking', you MUST filter using the `Type` column (e.g., `ct.Type LIKE '%AMC%'`).
         * If the value is a specific trade (e.g., 'Electrician', 'CCTV', 'Interiors', 'Carpentry', 'Plumbing'), you MUST filter using the `Service` column (e.g., `ct.Service LIKE '%Electrician%'`).
 
-15. READABLE NAMES OVER IDs (CRITICAL): NEVER output raw numeric IDs for Company, Branch, or Employees. 
-    - Always LEFT JOIN the respective tables and select `company.CompanyName`, `branch.BranchSite`, or `employees.Name`.
+14. READABLE NAMES OVER IDs (CRITICAL): NEVER output raw numeric IDs for Company, Branch, or Employees. Always LEFT JOIN the respective tables and select `company.CompanyName`, `branch.BranchSite`, or `employees.Name`.
 """
 
     if intent == "summary":
         base_instructions += f"""
-16. SUMMARY MODE (STRICT COUNTS & GROUP BY): The user wants metrics, counts, or charts.
+15. SUMMARY MODE (STRICT COUNTS & GROUP BY): The user wants metrics, counts, or charts.
     - MANDATORY METRIC: You MUST ALWAYS use the `COUNT()` function. NEVER return raw ticket rows in summary mode.
-    - GLOBAL TOTALS: If the user asks for "all tickets", "total tickets", or asks "how many" without specifying a breakdown category, you MUST return a single global count: `SELECT COUNT({ticket_alias}.TicketID) AS TotalTickets FROM {base_table}`. (Apply WHERE clauses if the state has filters).
+    - CRITICAL FILTER RETENTION (NO SILENT DROPS): Just because you are doing a `COUNT()` does NOT mean you can ignore the Active Search State! If the state says Branch is 'Chennai' and Timeframe is 'Nov', your query MUST include the JOINs for the branch table and the WHERE clauses for BOTH Chennai and Nov. DO NOT DROP STATE FILTERS.
+    - GLOBAL TOTALS: If the user asks for "all tickets", "total tickets", or asks "how many" without specifying a breakdown category, you MUST return a single global count: `SELECT COUNT({ticket_alias}.TicketID) AS TotalTickets FROM {base_table}`.
     - BREAKDOWNS: If the user asks for a list of names or a breakdown (e.g., "by company", "branch wise"), you MUST `GROUP BY` that column and use `COUNT({ticket_alias}.TicketID) AS Count`.
     - STRICT SQL FIX: When using `GROUP BY`, your `SELECT` clause MUST ONLY contain the columns in the `GROUP BY`, plus the `COUNT()`. NEVER select `{ticket_alias}.TicketID`.
     - TOP RESULTS LOGIC: For breakdowns, always append `ORDER BY Count DESC LIMIT 500`.
 """
     else:
-        base_instructions += f"\n16. DETAIL MODE: Return standard rows and ALWAYS append `LIMIT {settings.MAX_ROWS_LIMIT}`."
+        base_instructions += f"\n15. DETAIL MODE: Return standard rows and ALWAYS append `LIMIT {settings.MAX_ROWS_LIMIT}`."
 
     prompt = f"{base_instructions}\n\nUser Query: {user_query}\nSQL Query:"
     return prompt
