@@ -1,4 +1,5 @@
 from config import settings
+from datetime import datetime # NEW: Import datetime for dynamic time
 
 # The Complete V4 Relational Data Dictionary (Hierarchical Domains)
 SCHEMA_DEFINITION = """
@@ -65,6 +66,11 @@ SCHEMA_DEFINITION = """
 """
 
 def build_sql_prompt(user_query: str, state: dict) -> str:
+    # 1. DYNAMIC DATE CALCULATION
+    current_date = datetime.now().strftime("%B %d, %Y")
+    current_year = datetime.now().strftime("%Y")
+    current_month_num = datetime.now().strftime("%m")
+
     # Extract intent and domain from state
     intent = state.get("intent", "detail")
     target_domain = state.get('domain') or 'corporate_tickets'
@@ -72,8 +78,6 @@ def build_sql_prompt(user_query: str, state: dict) -> str:
     # Dynamically determine the exact base table, alias, and the correct DATE COLUMN
     base_table = "ppm_tickets pt" if "ppm" in target_domain.lower() else "corporate_tickets ct"
     ticket_alias = "pt" if "ppm" in target_domain.lower() else "ct"
-    
-    # NEW: Strictly use PPMDate for PPM domain, CreatedDate for Corporate
     date_col = "PPMDate" if "ppm" in target_domain.lower() else "CreatedDate"
         
     base_instructions = f"""You are an elite MySQL data analyst. 
@@ -95,10 +99,10 @@ CRITICAL RULES:
 9. AMBIGUOUS STATUS: Always alias Status columns when joining (e.g., `{ticket_alias}.Status AS CurrentStatus`).
 10. RANKING/SORTING: If asked for "most expensive" or "highest", you MUST use `ORDER BY [ColumnName] DESC`.
 11. ZERO ASSUMPTIONS: Do NOT guess. Do not add `WHERE` clauses for Status, Service, or Priority unless explicitly stated in the User Query or Active Search State.
-12. INTELLIGENT TIMEFRAMES (VARCHAR DATE FIX): The `{ticket_alias}.{date_col}` column is stored as a VARCHAR string, NOT a strict SQL DATE. 
-    - CRITICAL: DO NOT USE `MONTH()` or `YEAR()` directly on this column. It will fail and return 0 rows.
-    - Instead, use `LIKE` with wildcards for safe string matching. For example, for December 2025, use: `WHERE ({ticket_alias}.{date_col} LIKE '%-12-2025' OR {ticket_alias}.{date_col} LIKE '2025-12-%')`.
-    - TODAY'S REFERENCE DATE: March 6, 2026.
+12. DYNAMIC TIMEFRAMES (VARCHAR DATE FIX): The `{ticket_alias}.{date_col}` column is stored as a VARCHAR string, NOT a strict SQL DATE. 
+    - CRITICAL: DO NOT USE `MONTH()` or `YEAR()` directly on this column in WHERE clauses.
+    - Instead, use `LIKE` with wildcards. For example, for December 2025, use: `WHERE ({ticket_alias}.{date_col} LIKE '%-12-2025' OR {ticket_alias}.{date_col} LIKE '2025-12-%')`.
+    - DYNAMIC AWARENESS: Today's exact date is {current_date}. If the user asks for "this month", use the current month number ({current_month_num}) and year ({current_year}) in your LIKE clause!
 
 === ACTIVE SEARCH STATE (CRITICAL) ===
 This state represents the ABSOLUTE TRUTH of the current filters. Even if the user's latest text query does not mention a filter, if it has a value in this state, YOU MUST APPLY IT using a `WHERE` clause. Do not ignore the state.
@@ -112,7 +116,7 @@ This state represents the ABSOLUTE TRUTH of the current filters. Even if the use
 
 13. STRICT STATE ENFORCEMENT RULES (DO NOT SKIP):
     - FATAL ERROR PREVENTION: If a filter above is NOT 'None', you MUST write both the `JOIN` and the `WHERE` clause. Never use a column like `branch.BranchSite` or `company.CompanyName` in your query if you did not explicitly write the `JOIN` command for that table first!
-    - TIMEFRAME: If the Timeframe state is not None, you MUST add a `WHERE` clause using `{ticket_alias}.{date_col}` (e.g., `WHERE {ticket_alias}.{date_col} LIKE '%2025%'`).
+    - TIMEFRAME: If the Timeframe state is a specific period (e.g., '2025', 'Nov', 'this month'), you MUST add a `WHERE` clause using `{ticket_alias}.{date_col}`. *CRITICAL EXCEPTION:* If the Timeframe state is just a generic grouping word (e.g., 'month', 'monthly', 'month wise', 'by month', 'year', 'yearly', 'trend', 'all time'), DO NOT add a `WHERE` clause for the date! Just let it fetch all records and `GROUP BY` the time period.
     - COMPANY: If Company Name is provided, you MUST `LEFT JOIN company` (ON {ticket_alias}.CorporateID = company.ID) AND `LEFT JOIN corporate` (ON company.CorporateName = corporate.ID) BEFORE using them in the WHERE clause. Then filter using: `(corporate.CorporateName LIKE '%[Name]%' OR company.CompanyName LIKE '%[Name]%')`.
     - BRANCH: If Branch Name is provided, you MUST `LEFT JOIN branch` (ON {ticket_alias}.BranchID = branch.ID) BEFORE filtering by branch. 
     - ANTI-SPELLING BUG (CRITICAL WILDCARDS): When filtering Branch or Company names with LIKE, use only the first 4 letters of the word, and wrap it in `%` (e.g., `LIKE '%Mumb%'`).
@@ -126,13 +130,27 @@ This state represents the ABSOLUTE TRUTH of the current filters. Even if the use
 
     if intent == "summary":
         base_instructions += f"""
-15. SUMMARY MODE (STRICT COUNTS & GROUP BY): The user wants metrics, counts, or charts.
-    - MANDATORY METRIC: You MUST ALWAYS use the `COUNT()` function. NEVER return raw ticket rows in summary mode.
-    - CRITICAL FILTER RETENTION (NO SILENT DROPS): Just because you are doing a `COUNT()` does NOT mean you can ignore the Active Search State! If the state says Branch is 'Chennai' and Timeframe is 'Nov', your query MUST include the JOINs for the branch table and the WHERE clauses for BOTH Chennai and Nov. DO NOT DROP STATE FILTERS.
-    - GLOBAL TOTALS: If the user asks for "all tickets", "total tickets", or asks "how many" without specifying a breakdown category, you MUST return a single global count: `SELECT COUNT({ticket_alias}.TicketID) AS TotalTickets FROM {base_table}`.
-    - BREAKDOWNS: If the user asks for a list of names or a breakdown (e.g., "by company", "branch wise"), you MUST `GROUP BY` that column and use `COUNT({ticket_alias}.TicketID) AS Count`.
-    - STRICT SQL FIX: When using `GROUP BY`, your `SELECT` clause MUST ONLY contain the columns in the `GROUP BY`, plus the `COUNT()`. NEVER select `{ticket_alias}.TicketID`.
-    - TOP RESULTS LOGIC: For breakdowns, always append `ORDER BY Count DESC LIMIT 500`.
+15. SUMMARY MODE (STRICT COUNTS & GROUP BY): The user wants metrics, counts, averages, or charts.
+    - CRITICAL FILTER RETENTION (NO SILENT DROPS): Just because you are doing a grouping does NOT mean you can ignore the Active Search State! If the state has filters, your query MUST include the JOINs and WHERE clauses for them. DO NOT DROP STATE FILTERS.
+    
+    - ADVANCED METRICS (RESOLUTION TIME / AVERAGES): If the user asks for "average time", "time to close", "slowest", "fastest", or "resolution time":
+        * Do NOT use COUNT(). 
+        * Use `ROUND(AVG(GREATEST(DATEDIFF({ticket_alias}.CloseDate, {ticket_alias}.{date_col}), 0)), 1) AS AvgDaysToClose`. 
+        * (Note: GREATEST(..., 0) ensures that tickets closed earlier than their scheduled date count as 0 days late, preventing negative averages).
+        * DATA CLEANSING (CRITICAL): You MUST add `AND {ticket_alias}.CloseDate IS NOT NULL AND {ticket_alias}.CloseDate != ''` to your WHERE clause.
+        * Group by the requested category (e.g., Company, Branch) and `ORDER BY AvgDaysToClose DESC`.
+        
+    - STANDARD METRIC (COUNTS): If the user asks for "how many", "breakdown", or "total tickets" (and does NOT mention averages/time to close), you MUST ALWAYS use the `COUNT({ticket_alias}.TicketID) AS Count` function.
+    
+    - GLOBAL TOTALS: If the user asks for "all tickets" without specifying a breakdown category, return a single global metric (Count or Average).
+    
+    - TIME-SERIES / TREND ANALYSIS: If the user asks for a trend over time (e.g., "trend", "month wise", "by month"), you MUST extract the Year and Month from the `{ticket_alias}.{date_col}` string to group by it. 
+        * The dates in the database are stored as YYYY-MM-DD. 
+        * You MUST use `LEFT({ticket_alias}.{date_col}, 7)` AS TimePeriod to extract 'YYYY-MM'. Do NOT use RIGHT() or SUBSTRING().
+        * Group by `TimePeriod` and order by `TimePeriod ASC`.
+        
+    - STRICT SQL FIX: When using `GROUP BY`, your `SELECT` clause MUST ONLY contain the columns in the `GROUP BY`, plus the Metric (Count or Avg). NEVER select `{ticket_alias}.TicketID`.
+    - TOP RESULTS LOGIC: For non-time breakdowns, always append `LIMIT 500`.
 """
     else:
         base_instructions += f"\n15. DETAIL MODE: Return standard rows and ALWAYS append `LIMIT {settings.MAX_ROWS_LIMIT}`."

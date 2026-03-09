@@ -1,4 +1,5 @@
 import time
+import json
 from fastapi import FastAPI, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
@@ -349,24 +350,37 @@ async def process_query(request: QueryRequest, background_tasks: BackgroundTasks
     print("Formatting payload...")
     final_payload = format_response(intent, safe_rows)
     
-    # SMART OUTPUT BYPASS (If it's a Fast-Pass, skip the chatty AI paragraph)
-    if is_fast_pass and is_success and len(safe_rows) > 0:
-        print("Fast-Pass Output: Skipping LLM summary. Using professional BI text.")
-        limit_msg = " (Maximum display limit reached)" if len(safe_rows) >= 500 else ""
-        
-        if intent == "summary" and len(safe_rows) == 1 and len(safe_rows[0]) == 1:
-            val = list(safe_rows[0].values())[0]
-            ai_human_text = f"Metric calculated: {val}"
+    row_count = len(safe_rows)
+    limit_msg = "(Maximum display limit reached)" if row_count >= 500 else ""
+
+    if is_success and row_count > 0:
+        if intent == 'summary':
+            #PATH A: The Analyst (Trigger the observer LLM for insights on charts)
+            print("Adaptive Intelligence: Generating executive insight for summary data...")
+
+            # We call your existing AI summarizer, but ONLY pass the top 50 rows 
+            # to protect the context window ans save tokens!
+            ai_human_text = await generate_human_summary(
+                request.query,
+                safe_rows[:50],
+                state=new_state,
+                error_msg=None
+            )
         else:
-            ai_human_text = f"Data retrieved: {len(safe_rows)} records{limit_msg}."
-    else:
-        print("Generating human-readable summary via LLM...")
+            # PATH B: The Fasr-Pass (Zero tokens, instant fetch for raw Tables)
+            print("Fast-Pass Output: Detail fetch detected. Skipping LLM insight.")
+            ai_human_text = f"Data retrived: {row_count} records{limit_msg}."
+    elif not is_success:
+        print("Databse error: Generating human-readable error summary...")
         ai_human_text = await generate_human_summary(
-            request.query, 
-            safe_rows, 
-            state=new_state, 
-            error_msg=db_error if not is_success else None
+            request.query,
+            safe_rows,
+            state=new_state,
+            error_msg=db_error
         )
+    else:
+        ai_human_text = "No records found."
+
     
     # Attach data to the payload
     if isinstance(final_payload, dict):

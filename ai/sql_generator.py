@@ -36,12 +36,11 @@ async def generate_sql(prompt: str) -> str:
 
 async def generate_human_summary(user_query: str, raw_data: list, state: dict = None, error_msg: str = None) -> str:
     """
-    Generates a conversational summary of the data. 
-    Now strictly aware of the active JSON State and the dynamic shape of the data.
+    Generates a conversational summary or executive insight of the data. 
+    Acts as a Senior Data Analyst providing agentic insights on dashboard charts.
     """
-    # 1. STATE-AWARE NAMING: Check the memory to know exactly what we are looking at.
+    # 1. STATE-AWARE NAMING
     domain = state.get("domain", "") if state else ""
-    # Fallback to corporate_tickets if domain is completely None/Empty
     safe_domain = domain or "corporate_tickets" 
     ticket_type = "PPM tickets" if "ppm" in safe_domain.lower() else "corporate tickets"
     
@@ -55,43 +54,42 @@ async def generate_human_summary(user_query: str, raw_data: list, state: dict = 
         Do not use markdown formatting.
         """
     else:
-        # Convert safely to string to prevent JSON parsing crashes
-        data_sample = str(raw_data[:5])
-        row_count = len(raw_data)
-        
+        # Convert to clean JSON string (app.py already sliced this to top 50 rows)
+        import json
+        try:
+            data_sample = json.dumps(raw_data)
+        except Exception:
+            data_sample = str(raw_data)
+            
         prompt = f"""
-        You are a helpful, professional corporate data assistant. 
+        You are an elite Senior Data Analyst. 
         The user asked: "{user_query}"
-        The database returned a result set containing {row_count} rows. 
-        Here is a sample of the top records in the data: {data_sample}
         
-        Write a 2 to 3 sentence conversational summary of this data. 
+        Here is the raw JSON data returned from the database for the visual chart:
+        {data_sample}
         
-        CRITICAL NAMING RULES:
-        1. DYNAMIC CONTEXT (Total Count vs Top Results): 
-           - IF the data sample contains a column like `TotalTickets` or `TotalCount` and NO grouping names, this is a GRAND TOTAL. State the exact number from the sample (e.g., "There are a total of X {ticket_type} matching your search.").
-           - IF the data contains `TicketID`, say "We fetched {row_count} individual {ticket_type} records..."
-           - IF the data contains grouped columns (like CompanyName or BranchSite), say "We found {row_count} unique branches/companies..." and highlight the top 1 or 2 results from the sample data.
-        2. THE LIMIT WARNING (CRITICAL):
-           - If {row_count} is exactly {settings.MAX_ROWS_LIMIT} (or exactly 500), explicitly tell the user: "Note: We fetched the maximum display limit of {settings.MAX_ROWS_LIMIT} results, but there may be more in the database."
-        3. NO MATH ALLOWED: NEVER attempt to add, sum, or calculate totals from the data yourself. 
-        4. TOP RESULTS: State the highest/top result factually based ONLY on the numbers provided.
+        Your Task: Provide a sharp, executive-level insight based ONLY on this data.
         
-        Do not use markdown formatting. Do not output the raw JSON.
+        Strict Rules:
+        1. Do not narrate the data: Never say "Here is a breakdown..." or list out the rows. The user can already see the visual chart!
+        2. Find the Anomaly/Leader: Identify the highest performer, the lowest performer, or a distinct trend. If it's just a single total number, give a quick thought on it.
+        3. Be Concise: Maximum 2 to 3 sentences. Get straight to the point.
+        4. Suggest a Next Step: Always end with one logical follow-up question the user could ask to drill deeper (e.g., "Would you like me to break this down by branch?").
+        5. Format: Output ONLY the insight text. No markdown, no code blocks, no robotic greetings.
         """
     
     try:
         response = await client.chat.completions.create(
             model=settings.LLM_MODEL,
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.2, 
-            max_tokens=200
+            temperature=0.3, # Slightly adjusted for analytical reasoning
+            max_tokens=150
         )
         return response.choices[0].message.content.strip()
     except Exception as e:
         print(f"Summary Generation Error: {e}")
         # 2. GRACEFUL FALLBACK: If the LLM times out but we HAVE data, don't lie to the user!
         if raw_data:
-            return f"Here is the requested data regarding {ticket_type}. Please see the table below for details."
+            return f"Here is the requested data regarding {ticket_type}. Please see the chart below for details."
         else:
             return "I could not find data matching that request. Please try asking about a specific ticket ID or category."
